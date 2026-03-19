@@ -16,11 +16,15 @@ def init_db():
     conn = get_conn()
     conn.executescript("""
         CREATE TABLE IF NOT EXISTS products (
-            id         INTEGER PRIMARY KEY AUTOINCREMENT,
-            reference  TEXT UNIQUE NOT NULL,
-            name       TEXT,
-            source     TEXT DEFAULT 'manual',
-            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            id             INTEGER PRIMARY KEY AUTOINCREMENT,
+            reference      TEXT UNIQUE NOT NULL,
+            name           TEXT,
+            source         TEXT DEFAULT 'manual',
+            category       TEXT,
+            sous_categorie TEXT,
+            marque         TEXT,
+            pvc            REAL,
+            created_at     TEXT DEFAULT CURRENT_TIMESTAMP
         );
 
         CREATE TABLE IF NOT EXISTS scrape_sessions (
@@ -47,14 +51,45 @@ def init_db():
 
         CREATE INDEX IF NOT EXISTS idx_results_product_site
             ON scrape_results(product_id, site, scraped_at DESC);
+
+        CREATE TABLE IF NOT EXISTS sites (
+            id             INTEGER PRIMARY KEY AUTOINCREMENT,
+            name           TEXT NOT NULL,
+            domain         TEXT NOT NULL UNIQUE,
+            scraper_key    TEXT NOT NULL UNIQUE,
+            price_selector TEXT NOT NULL,
+            threshold      REAL NOT NULL DEFAULT 0,
+            enabled        INTEGER NOT NULL DEFAULT 1,
+            created_at     TEXT DEFAULT CURRENT_TIMESTAMP
+        );
     """)
     conn.commit()
 
-    # Safe migration: add category column if it doesn't exist yet
-    try:
-        conn.execute("ALTER TABLE products ADD COLUMN category TEXT")
-        conn.commit()
-    except Exception:
-        pass  # Column already exists
+    # Safe migrations for existing databases
+    for migration in [
+        "ALTER TABLE products ADD COLUMN category TEXT",
+        "ALTER TABLE products ADD COLUMN pvc REAL",
+        "ALTER TABLE products ADD COLUMN sous_categorie TEXT",
+        "ALTER TABLE products ADD COLUMN marque TEXT",
+        "ALTER TABLE sites ADD COLUMN price_selector TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE sites ADD COLUMN threshold REAL NOT NULL DEFAULT 0",
+    ]:
+        try:
+            conn.execute(migration)
+            conn.commit()
+        except Exception:
+            pass  # Column already exists
+
+    # Seed the 3 default sites
+    for name, domain, scraper_key, price_selector in [
+        ("Tunisianet", "tunisianet.com.tn", "tunisianet", "span.current-price-value"),
+        ("Mytek",      "mytek.tn",          "mytek",      ".product-info-price span.price"),
+        ("Spacenet",   "spacenet.tn",       "spacenet",   "span.current-price-value"),
+    ]:
+        conn.execute(
+            "INSERT OR IGNORE INTO sites (name, domain, scraper_key, price_selector) VALUES (?, ?, ?, ?)",
+            (name, domain, scraper_key, price_selector),
+        )
+    conn.commit()
 
     conn.close()

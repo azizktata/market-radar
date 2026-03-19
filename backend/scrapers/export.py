@@ -1,6 +1,6 @@
 """
 Excel export — generates a .xlsx file matching the spec column layout.
-Lowest price per row is highlighted in green.
+Lowest price per row is highlighted in green; OK/KO status based on PVC comparison.
 """
 
 import io
@@ -8,52 +8,34 @@ from openpyxl import Workbook
 from openpyxl.styles import PatternFill, Font, Alignment
 from openpyxl.utils import get_column_letter
 
-SITES = ["tunisianet", "mytek", "spacenet"]
-
-GREEN_FILL = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")
-RED_FILL   = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")
+GREEN_FILL  = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")
+RED_FILL    = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")
 HEADER_FILL = PatternFill(start_color="2D6A4F", end_color="2D6A4F", fill_type="solid")
 HEADER_FONT = Font(bold=True, color="FFFFFF")
 
-SITE_LABELS = {
-    "tunisianet": "Tunisianet",
-    "mytek":      "Mytek",
-    "spacenet":   "Spacenet",
-}
 
-COLUMNS = ["Référence", "Nom"]
-for site in SITES:
-    label = SITE_LABELS[site]
-    COLUMNS += [f"Prix {label}", f"Statut {label}", f"URL {label}"]
-COLUMNS.append("Dernière mise à jour")
-
-
-def build_excel(products: list[dict]) -> bytes:
+def build_excel(products: list[dict], sites: list[dict]) -> bytes:
     """
     products: list of dicts returned by GET /api/products
-    Each dict has shape:
-    {
-      "id": int,
-      "reference": str,
-      "name": str | None,
-      "tunisianet": {"price": float|None, "price_raw": str|None, "availability": str|None, "url": str|None, "scraped_at": str|None},
-      "mytek":      { ... },
-      "spacenet":   { ... },
-    }
-    Returns raw bytes of the .xlsx file.
+    sites: list of enabled site dicts with keys: scraper_key, name, threshold
     """
+    columns = ["Référence", "Nom", "Marque", "Catégorie", "Sous-catégorie", "PVC"]
+    for s in sites:
+        label = s["name"]
+        columns += [f"Prix {label}", f"Statut {label}", f"URL {label}"]
+    columns.append("Dernière mise à jour")
+
     wb = Workbook()
     ws = wb.active
     ws.title = "Market Radar"
 
     # Header row
-    for col_idx, col_name in enumerate(COLUMNS, start=1):
+    for col_idx, col_name in enumerate(columns, start=1):
         cell = ws.cell(row=1, column=col_idx, value=col_name)
         cell.fill = HEADER_FILL
         cell.font = HEADER_FONT
         cell.alignment = Alignment(horizontal="center")
 
-    # Freeze header
     ws.freeze_panes = "A2"
 
     # Data rows
@@ -62,19 +44,32 @@ def build_excel(products: list[dict]) -> bytes:
 
         ws.cell(row=row_idx, column=1, value=product.get("reference", ""))
         ws.cell(row=row_idx, column=2, value=product.get("name") or "")
+        ws.cell(row=row_idx, column=3, value=product.get("marque") or "")
+        ws.cell(row=row_idx, column=4, value=product.get("category") or "")
+        ws.cell(row=row_idx, column=5, value=product.get("sous_categorie") or "")
+        ws.cell(row=row_idx, column=6, value=product.get("pvc") or "")
 
-        col = 3
+        col = 7
         last_scraped = None
-        for site in SITES:
-            data = product.get(site) or {}
+        pvc = product.get("pvc")
+
+        for s in sites:
+            site_key = s["scraper_key"]
+            threshold = s.get("threshold", 0)
+            data = product.get(site_key) or {}
             price = data.get("price")
             price_raw = data.get("price_raw") or ""
-            avail = data.get("availability") or ""
             url = data.get("url") or ""
             scraped_at = data.get("scraped_at")
 
+            # OK/KO status
+            if pvc and price is not None:
+                status_val = "OK" if price <= pvc * (1 + threshold / 100) else "KO"
+            else:
+                status_val = ""
+
             ws.cell(row=row_idx, column=col,     value=price_raw)
-            ws.cell(row=row_idx, column=col + 1, value=avail)
+            ws.cell(row=row_idx, column=col + 1, value=status_val)
             link_cell = ws.cell(row=row_idx, column=col + 2, value=url)
             if url:
                 link_cell.hyperlink = url
@@ -88,21 +83,21 @@ def build_excel(products: list[dict]) -> bytes:
 
             col += 3
 
-        ws.cell(row=row_idx, column=len(COLUMNS), value=last_scraped or "")
+        ws.cell(row=row_idx, column=len(columns), value=last_scraped or "")
 
         # Highlight cheapest / most expensive price in each row
-        if prices:
+        if len(prices) > 1:
             min_price = min(p for p, _ in prices)
             max_price = max(p for p, _ in prices)
             for price, col_idx in prices:
                 cell = ws.cell(row=row_idx, column=col_idx)
-                if price == min_price and len(prices) > 1:
+                if price == min_price:
                     cell.fill = GREEN_FILL
-                elif price == max_price and len(prices) > 1:
+                elif price == max_price:
                     cell.fill = RED_FILL
 
-    # Auto-size columns (approximate)
-    for col_idx, col_name in enumerate(COLUMNS, start=1):
+    # Auto-size columns
+    for col_idx, col_name in enumerate(columns, start=1):
         max_len = len(col_name) + 2
         col_letter = get_column_letter(col_idx)
         ws.column_dimensions[col_letter].width = min(max_len, 40)

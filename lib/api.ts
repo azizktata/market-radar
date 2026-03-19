@@ -23,10 +23,22 @@ export type Product = {
   name: string | null;
   source: string;
   category: string | null;
+  sous_categorie: string | null;
+  marque: string | null;
+  pvc: number | null;
   created_at: string;
-  tunisianet: SiteResult | null;
-  mytek: SiteResult | null;
-  spacenet: SiteResult | null;
+  [siteKey: string]: SiteResult | null | number | string | null;
+};
+
+export type Site = {
+  id: number;
+  name: string;
+  domain: string;
+  scraper_key: string;
+  price_selector: string;
+  threshold: number;
+  enabled: boolean;
+  created_at: string;
 };
 
 export type Session = {
@@ -42,28 +54,60 @@ export type Session = {
 export const api = {
   getProducts: () => req<Product[]>("/api/products"),
 
-  addProduct: (reference: string, name?: string) =>
+  addProduct: (data: { reference: string; name?: string; category?: string; sous_categorie?: string; marque?: string; pvc?: number }) =>
     req<Product>("/api/products", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ reference, name }),
+      body: JSON.stringify(data),
     }),
 
-  addProductsBulk: (references: string[]) =>
-    req<{ added: number }>("/api/products/bulk", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ references }),
-    }),
+  importProducts: async (file: File): Promise<{ added: number; skipped: number }> => {
+    const form = new FormData();
+    form.append("file", file);
+    const res = await fetch(`${BASE}/api/products/import`, { method: "POST", body: form });
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      throw new Error(`${res.status} ${text}`);
+    }
+    return res.json();
+  },
 
   deleteProduct: (id: number) =>
     fetch(`${BASE}/api/products/${id}`, { method: "DELETE" }),
 
-  startDiscover: (sites?: string[]) =>
-    req<{ session_id: number }>("/api/discover", {
+  clearProducts: () =>
+    req<{ deleted: number }>("/api/products", { method: "DELETE" }),
+
+  getSites: () => req<Site[]>("/api/sites"),
+
+  addSite: (data: {
+    name: string; domain: string;
+    sample_url?: string;
+    price_selector?: string;
+    scraper_key?: string;
+    threshold?: number; enabled?: boolean;
+  }) =>
+    req<Site & { detected: boolean; price_sample: string | null }>("/api/sites", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ sites: sites ?? ["tunisianet", "mytek", "spacenet"] }),
+      body: JSON.stringify(data),
+    }),
+
+  updateSite: (id: number, data: Partial<Omit<Site, "id" | "created_at">> & { sample_url?: string }) =>
+    req<Site>(`/api/sites/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    }),
+
+  deleteSite: (id: number) =>
+    fetch(`${BASE}/api/sites/${id}`, { method: "DELETE" }),
+
+  detectSiteSelector: (url: string) =>
+    req<{ selector: string | null; price_sample: string | null }>("/api/sites/detect", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url }),
     }),
 
   startScrape: (productIds?: number[], resumeFromSession?: number, categories?: string[]) =>

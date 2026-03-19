@@ -8,10 +8,7 @@ interface ProgressBarProps {
 
 export function ProgressBar({ session }: ProgressBarProps) {
   const pct = session.total > 0 ? Math.round((session.done / session.total) * 100) : 0;
-  const label =
-    session.type === "discover"
-      ? `Découverte en cours… ${session.done} / ${session.total} sites`
-      : `Scraping en cours… ${session.done} / ${session.total} tâches`;
+  const label = `Scraping en cours… ${session.done} / ${session.total} produit(s)`;
 
   return (
     <div className="rounded-md border bg-muted/30 p-3 space-y-1.5">

@@ -1,13 +1,14 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Download, RefreshCw, Search, Plus, Square, Play, RotateCcw } from "lucide-react";
+import { Download, RefreshCw, Plus, Square, Play, RotateCcw, FileUp, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ProductTable } from "@/components/product-table";
 import { AddProductDialog } from "@/components/add-product-dialog";
+import { ImportExcelDialog } from "@/components/import-excel-dialog";
 import { ProgressBar } from "@/components/progress-bar";
 import { StatsCards } from "@/components/stats-cards";
-import { api, type Product, type Session } from "@/lib/api";
+import { api, type Product, type Session, type Site } from "@/lib/api";
 
 export default function Home() {
   const [products, setProducts] = useState<Product[]>([]);
@@ -16,9 +17,11 @@ export default function Home() {
   const [session, setSession] = useState<Session | null>(null);
   const [stopping, setStopping] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
   const [categories, setCategories] = useState<string[]>([]);
   const [selectedCategory, setSelectedCategory] = useState("");
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
+  const [sites, setSites] = useState<Site[]>([]);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const loadProducts = useCallback(async () => {
@@ -33,14 +36,13 @@ export default function Home() {
     }
   }, []);
 
-  // On mount, recover any in-progress or stopped session
   useEffect(() => {
     loadProducts();
     api.getLatestSession().then((s) => { if (s) setSession(s); }).catch(() => {});
     api.getCategories().then(setCategories).catch(() => {});
+    api.getSites().then(setSites).catch(() => {});
   }, [loadProducts]);
 
-  // Refresh categories when products reload
   useEffect(() => {
     if (products.length > 0) {
       api.getCategories().then(setCategories).catch(() => {});
@@ -66,13 +68,6 @@ export default function Home() {
     return () => { if (pollRef.current) clearInterval(pollRef.current); };
   }, [session, loadProducts]);
 
-  async function handleDiscover() {
-    try {
-      const { session_id } = await api.startDiscover();
-      setSession(await api.getSession(session_id));
-    } catch (e: any) { alert(e.message); }
-  }
-
   async function handleScrape(resumeFrom?: number) {
     try {
       let session_id: number;
@@ -84,16 +79,16 @@ export default function Home() {
         ({ session_id } = await api.startScrape(undefined, resumeFrom));
       }
       setSession(await api.getSession(session_id));
-    } catch (e: any) { alert(e.message); }
+    } catch (e: unknown) { alert(e instanceof Error ? e.message : String(e)); }
   }
 
   async function handleStop() {
     setStopping(true);
-    try { await api.stopScrape(); } catch (e: any) { alert(e.message); setStopping(false); }
+    try { await api.stopScrape(); } catch (e: unknown) { alert(e instanceof Error ? e.message : String(e)); setStopping(false); }
   }
 
-  async function handleAdd(refs: string[]) {
-    await api.addProductsBulk(refs);
+  async function handleAdd(product: { reference: string; name?: string; category?: string; sous_categorie?: string; marque?: string; pvc?: number }) {
+    await api.addProduct(product);
     await loadProducts();
   }
 
@@ -102,11 +97,21 @@ export default function Home() {
     setProducts((prev) => prev.filter((p) => p.id !== id));
   }
 
+  async function handleClearAll() {
+    if (!window.confirm(`Supprimer les ${products.length} produit(s) ? Cette action est irréversible.`)) return;
+    await api.clearProducts();
+    setProducts([]);
+  }
+
   const isRunning = session?.status === "running";
   const isStopped = session?.status === "stopped";
 
+  const siteColumns = sites
+    .filter((s) => s.enabled)
+    .map((s) => ({ key: s.scraper_key, label: s.name, threshold: s.threshold }));
+
   const lastScrape = products
-    .flatMap((p) => ["tunisianet", "mytek", "spacenet"].map((s) => (p as any)[s]?.scraped_at))
+    .flatMap((p) => siteColumns.map((s) => (p[s.key] as { scraped_at?: string } | null)?.scraped_at))
     .filter(Boolean).sort().at(-1);
 
   const scrapeLabel = selectedIds.length > 0
@@ -119,23 +124,29 @@ export default function Home() {
     <div className="min-h-screen bg-background">
       <header className="border-b">
         <div className="mx-auto max-w-screen-xl px-6 py-4 flex items-center justify-between">
-          <div>
-            <h1 className="text-xl font-bold tracking-tight">Market Radar</h1>
-            <p className="text-xs text-muted-foreground mt-0.5">
-              {products.length} produit(s)
-              {lastScrape && <> · Dernière mise à jour : {new Date(lastScrape).toLocaleString("fr-TN")}</>}
-            </p>
-          </div>
+          <p className="text-xs text-muted-foreground">
+            {products.length} produit(s)
+            {lastScrape && <> · Dernière mise à jour : {new Date(lastScrape).toLocaleString("fr-TN")}</>}
+          </p>
 
           <div className="flex items-center gap-2">
-            <Button variant="outline" size="sm" onClick={handleDiscover} disabled={isRunning}>
-              <Search className="size-4 mr-1.5" />Découvrir
-            </Button>
             <Button variant="outline" size="sm" onClick={() => setAddOpen(true)} disabled={isRunning}>
               <Plus className="size-4 mr-1.5" />Ajouter
             </Button>
+            <Button variant="outline" size="sm" onClick={() => setImportOpen(true)} disabled={isRunning}>
+              <FileUp className="size-4 mr-1.5" />Importer Excel
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="text-destructive hover:text-destructive"
+              onClick={handleClearAll}
+              disabled={isRunning || products.length === 0}
+            >
+              <Trash2 className="size-4 mr-1.5" />Vider la liste
+            </Button>
 
-            {categories.length > 0 && (
+            {/* {categories.length > 0 && (
               <select
                 value={selectedCategory}
                 onChange={(e) => { setSelectedCategory(e.target.value); setSelectedIds([]); }}
@@ -147,7 +158,7 @@ export default function Home() {
                   <option key={c} value={c}>{c}</option>
                 ))}
               </select>
-            )}
+            )} */}
 
             {isRunning ? (
               <Button size="sm" variant="destructive" onClick={handleStop} disabled={stopping}>
@@ -174,7 +185,7 @@ export default function Home() {
           </div>
         )}
 
-        {products.length > 0 && <StatsCards products={products} />}
+        {products.length > 0 && <StatsCards products={products} sites={siteColumns} />}
 
         {session && (isRunning || session.status === "done") && (
           <ProgressBar session={session} />
@@ -201,6 +212,7 @@ export default function Home() {
         ) : (
           <ProductTable
             products={products}
+            sites={siteColumns}
             onDelete={handleDelete}
             selectable
             onSelectionChange={(ids) => { setSelectedIds(ids); if (ids.length > 0) setSelectedCategory(""); }}
@@ -209,6 +221,7 @@ export default function Home() {
       </main>
 
       <AddProductDialog open={addOpen} onClose={() => setAddOpen(false)} onAdd={handleAdd} />
+      <ImportExcelDialog open={importOpen} onClose={() => setImportOpen(false)} onImported={loadProducts} />
     </div>
   );
 }

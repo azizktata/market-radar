@@ -10,9 +10,11 @@ import {
   useReactTable,
   SortingState,
   RowSelectionState,
+  VisibilityState,
 } from "@tanstack/react-table";
-import { useState } from "react";
-import { ArrowUpDown, ExternalLink, Trash2 } from "lucide-react";
+import { useState, useRef, useEffect } from "react";
+import { createPortal } from "react-dom";
+import { ArrowUpDown, ExternalLink, Trash2, Columns3 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import {
@@ -25,26 +27,7 @@ import {
 } from "@/components/ui/table";
 import type { Product, SiteResult } from "@/lib/api";
 
-const SITES: Array<{ key: keyof Pick<Product, "tunisianet" | "mytek" | "spacenet">; label: string }> = [
-  { key: "tunisianet", label: "Tunisianet" },
-  { key: "mytek",      label: "Mytek" },
-  { key: "spacenet",   label: "Spacenet" },
-];
-
-function AvailBadge({ value }: { value: string | null }) {
-  if (!value) return <span className="text-muted-foreground text-xs">—</span>;
-  const lower = value.toLowerCase();
-  const color = lower.includes("disponible") || lower.includes("en stock")
-    ? "bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-300"
-    : lower.includes("puis") || lower.includes("rupt") || lower.includes("hors stock")
-    ? "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300"
-    : "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300";
-  return (
-    <span className={cn("rounded-full px-2 py-0.5 text-xs font-medium whitespace-nowrap", color)}>
-      {value}
-    </span>
-  );
-}
+type SiteCol = { key: string; label: string; threshold: number };
 
 function PriceCell({
   result,
@@ -69,7 +52,19 @@ function PriceCell({
   );
 }
 
-function buildColumns(onDelete: (id: number) => void): ColumnDef<Product>[] {
+function StatusBadge({ price, pvc, threshold }: { price: number | null; pvc: number | null; threshold: number }) {
+  if (price == null || pvc == null) {
+    return <span className="text-muted-foreground text-xs">—</span>;
+  }
+  const ok = price <= pvc * (1 + threshold / 100);
+  return (
+    <span className={cn("font-medium text-sm", ok ? "text-green-600 dark:text-green-400" : "text-red-600 dark:text-red-400")}>
+      {ok ? "OK" : "KO"}
+    </span>
+  );
+}
+
+function buildColumns(sites: SiteCol[], onDelete: (id: number) => void): ColumnDef<Product>[] {
   const cols: ColumnDef<Product>[] = [
     {
       accessorKey: "reference",
@@ -94,9 +89,40 @@ function buildColumns(onDelete: (id: number) => void): ColumnDef<Product>[] {
         </span>
       ),
     },
+    {
+      accessorKey: "marque",
+      header: "Marque",
+      cell: ({ row }) => (
+        <span className="text-sm">{(row.original.marque as string | null) ?? "—"}</span>
+      ),
+    },
+    {
+      accessorKey: "category",
+      header: "Catégorie",
+      cell: ({ row }) => (
+        <span className="text-sm text-muted-foreground">{(row.original.category as string | null) ?? "—"}</span>
+      ),
+    },
+    {
+      accessorKey: "sous_categorie",
+      header: "Sous-catégorie",
+      cell: ({ row }) => (
+        <span className="text-sm text-muted-foreground">{(row.original.sous_categorie as string | null) ?? "—"}</span>
+      ),
+    },
+    {
+      accessorKey: "pvc",
+      header: "PVC",
+      cell: ({ row }) => {
+        const pvc = row.original.pvc as number | null;
+        return pvc != null
+          ? <span className="tabular-nums text-sm">{pvc.toLocaleString("fr-TN")} DT</span>
+          : <span className="text-muted-foreground text-xs">—</span>;
+      },
+    },
   ];
 
-  for (const { key, label } of SITES) {
+  for (const { key, label, threshold } of sites) {
     cols.push({
       id: `${key}_prix`,
       header: ({ column }) => (
@@ -104,16 +130,17 @@ function buildColumns(onDelete: (id: number) => void): ColumnDef<Product>[] {
           Prix {label} <ArrowUpDown className="ml-1 size-3" />
         </Button>
       ),
-      accessorFn: (row) => row[key]?.price ?? null,
+      accessorFn: (row) => (row[key] as SiteResult | null)?.price ?? null,
       cell: ({ row }) => {
-        const prices = SITES.map((s) => row.original[s.key]?.price).filter(
-          (p): p is number => p != null
-        );
-        const price = row.original[key]?.price ?? null;
+        const prices = sites
+          .map((s) => (row.original[s.key] as SiteResult | null)?.price)
+          .filter((p): p is number => p != null);
+        const result = row.original[key] as SiteResult | null;
+        const price = result?.price ?? null;
         const isCheapest = price != null && prices.length > 1 && price === Math.min(...prices);
         const isMostExp  = price != null && prices.length > 1 && price === Math.max(...prices);
         return (
-          <PriceCell result={row.original[key]} isCheapest={isCheapest} isMostExpensive={isMostExp} />
+          <PriceCell result={result} isCheapest={isCheapest} isMostExpensive={isMostExp} />
         );
       },
     });
@@ -121,14 +148,18 @@ function buildColumns(onDelete: (id: number) => void): ColumnDef<Product>[] {
     cols.push({
       id: `${key}_statut`,
       header: `Statut ${label}`,
-      cell: ({ row }) => <AvailBadge value={row.original[key]?.availability ?? null} />,
+      cell: ({ row }) => {
+        const result = row.original[key] as SiteResult | null;
+        const pvc = row.original.pvc as number | null;
+        return <StatusBadge price={result?.price ?? null} pvc={pvc} threshold={threshold} />;
+      },
     });
 
     cols.push({
       id: `${key}_url`,
       header: `URL ${label}`,
       cell: ({ row }) => {
-        const url = row.original[key]?.url;
+        const url = (row.original[key] as SiteResult | null)?.url;
         if (!url) return <span className="text-muted-foreground text-xs">—</span>;
         return (
           <a href={url} target="_blank" rel="noopener noreferrer" className="text-primary hover:text-primary/80">
@@ -159,6 +190,7 @@ function buildColumns(onDelete: (id: number) => void): ColumnDef<Product>[] {
 
 interface ProductTableProps {
   products: Product[];
+  sites: SiteCol[];
   onDelete: (id: number) => void;
   selectable?: boolean;
   onSelectionChange?: (ids: number[]) => void;
@@ -166,14 +198,83 @@ interface ProductTableProps {
 
 const PAGE_SIZE = 50;
 
-export function ProductTable({ products, onDelete, selectable, onSelectionChange }: ProductTableProps) {
+const DEFAULT_HIDDEN: VisibilityState = {
+  category: false,
+  sous_categorie: false,
+  marque: false,
+};
+
+function ColumnToggle({ table }: { table: ReturnType<typeof useReactTable<Product>> }) {
+  const [open, setOpen] = useState(false);
+  const [pos, setPos] = useState({ top: 0, right: 0 });
+  const btnRef = useRef<HTMLDivElement>(null);
+  const dropRef = useRef<HTMLDivElement>(null);
+
+  function handleToggle() {
+    if (!open && btnRef.current) {
+      const rect = btnRef.current.getBoundingClientRect();
+      setPos({ top: rect.bottom + 4, right: window.innerWidth - rect.right });
+    }
+    setOpen((o) => !o);
+  }
+
+  useEffect(() => {
+    function onClickOutside(e: MouseEvent) {
+      if (
+        dropRef.current && !dropRef.current.contains(e.target as Node) &&
+        btnRef.current && !btnRef.current.contains(e.target as Node)
+      ) setOpen(false);
+    }
+    if (open) document.addEventListener("mousedown", onClickOutside);
+    return () => document.removeEventListener("mousedown", onClickOutside);
+  }, [open]);
+
+  const toggleable = table.getAllLeafColumns().filter(
+    (col) => !["select", "actions"].includes(col.id)
+  );
+
+  return (
+    <>
+      <div ref={btnRef}>
+        <Button variant="outline" size="sm" onClick={handleToggle}>
+          <Columns3 className="size-4 mr-1.5" />Colonnes
+        </Button>
+      </div>
+      {open && typeof window !== "undefined" && createPortal(
+        <div
+          ref={dropRef}
+          style={{ position: "fixed", top: pos.top, right: pos.right }}
+          className="z-50 w-56 rounded-md border bg-background shadow-lg p-2 max-h-80 overflow-y-auto"
+        >
+          {toggleable.map((col) => (
+            <label key={col.id} className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-muted cursor-pointer text-sm select-none">
+              <input
+                type="checkbox"
+                checked={col.getIsVisible()}
+                onChange={col.getToggleVisibilityHandler()}
+                className="rounded border-input shrink-0"
+              />
+              {typeof col.columnDef.header === "string"
+                ? col.columnDef.header
+                : col.id.replace(/_/g, " ")}
+            </label>
+          ))}
+        </div>,
+        document.body
+      )}
+    </>
+  );
+}
+
+export function ProductTable({ products, sites, onDelete, selectable, onSelectionChange }: ProductTableProps) {
   const [sorting, setSorting] = useState<SortingState>([]);
   const [globalFilter, setGlobalFilter] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("");
+  const [columnVisibility, setColumnVisibility] = useState<VisibilityState>(DEFAULT_HIDDEN);
   const [pagination, setPagination] = useState({ pageIndex: 0, pageSize: PAGE_SIZE });
   const [rowSelection, setRowSelection] = useState<RowSelectionState>({});
 
-  const categories = [...new Set(products.map((p) => p.category).filter((c): c is string => !!c))].sort();
+  const categories = [...new Set(products.map((p) => p.category as string | null).filter((c): c is string => !!c))].sort();
   const data = categoryFilter ? products.filter((p) => p.category === categoryFilter) : products;
 
   const columns: ColumnDef<Product>[] = selectable
@@ -199,15 +300,16 @@ export function ProductTable({ products, onDelete, selectable, onSelectionChange
           ),
           size: 36,
         },
-        ...buildColumns(onDelete),
+        ...buildColumns(sites, onDelete),
       ]
-    : buildColumns(onDelete);
+    : buildColumns(sites, onDelete);
 
   const table = useReactTable({
     data,
     columns,
-    state: { sorting, globalFilter, pagination, rowSelection },
+    state: { sorting, globalFilter, pagination, rowSelection, columnVisibility },
     onSortingChange: setSorting,
+    onColumnVisibilityChange: setColumnVisibility,
     onGlobalFilterChange: (v) => { setPagination((p) => ({ ...p, pageIndex: 0 })); setGlobalFilter(v); },
     onPaginationChange: setPagination,
     onRowSelectionChange: (updater) => {
@@ -252,7 +354,9 @@ export function ProductTable({ products, onDelete, selectable, onSelectionChange
             ))}
           </select>
         )}
-        <label className="flex items-center gap-1.5 text-sm text-muted-foreground whitespace-nowrap ml-auto">
+        <div className="ml-auto flex items-center gap-2">
+        <ColumnToggle table={table} />
+        <label className="flex items-center gap-1.5 text-sm text-muted-foreground whitespace-nowrap">
           Afficher
           <select
             value={table.getState().pagination.pageSize}
@@ -269,6 +373,7 @@ export function ProductTable({ products, onDelete, selectable, onSelectionChange
           </select>
           lignes
         </label>
+        </div>
       </div>
 
       <div className="rounded-md border">
@@ -300,7 +405,7 @@ export function ProductTable({ products, onDelete, selectable, onSelectionChange
             ) : (
               <TableRow>
                 <TableCell colSpan={columns.length} className="text-center py-10 text-muted-foreground">
-                  Aucun produit. Utilisez &ldquo;Découvrir&rdquo; ou &ldquo;Ajouter une référence&rdquo;.
+                  Aucun produit. Utilisez &ldquo;Ajouter&rdquo; ou &ldquo;Importer Excel&rdquo;.
                 </TableCell>
               </TableRow>
             )}

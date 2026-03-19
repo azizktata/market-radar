@@ -1,33 +1,30 @@
 import { useState } from "react";
 import { ChevronDown, ChevronUp } from "lucide-react";
-import type { Product } from "@/lib/api";
+import type { Product, SiteResult } from "@/lib/api";
 
-const SITES: Array<{ key: keyof Pick<Product, "tunisianet" | "mytek" | "spacenet">; label: string }> = [
-  { key: "tunisianet", label: "Tunisianet" },
-  { key: "mytek",      label: "Mytek" },
-  { key: "spacenet",   label: "Spacenet" },
-];
+type SiteCol = { key: string; label: string };
 
 interface StatsCardsProps {
   products: Product[];
+  sites: SiteCol[];
 }
 
-export function StatsCards({ products }: StatsCardsProps) {
-  const [visible, setVisible] = useState(true);
+export function StatsCards({ products, sites }: StatsCardsProps) {
+  const [visible, setVisible] = useState(false);
 
   const total = products.length;
   const scraped = products.filter((p) =>
-    SITES.some((s) => p[s.key]?.price != null || p[s.key]?.availability != null)
+    sites.some((s) => (p[s.key] as SiteResult | null)?.price != null)
   ).length;
 
-  const siteCounts = SITES.map((s) => ({
+  const siteCounts = sites.map((s) => ({
     label: s.label,
-    count: products.filter((p) => p[s.key]?.price != null).length,
+    count: products.filter((p) => (p[s.key] as SiteResult | null)?.price != null).length,
   }));
 
   const catMap = new Map<string, number>();
   for (const p of products) {
-    const cat = p.category ?? "Autres";
+    const cat = (p.category as string | null) ?? "Autres";
     catMap.set(cat, (catMap.get(cat) ?? 0) + 1);
   }
   const catEntries = [...catMap.entries()].sort((a, b) => b[1] - a[1]);
@@ -84,7 +81,7 @@ export function StatsCards({ products }: StatsCardsProps) {
           </div>
 
           {/* Per category */}
-          <div className="rounded-md border px-4 py-3">
+          {/* <div className="rounded-md border px-4 py-3">
             <p className="text-xs text-muted-foreground mb-2">Par catégorie</p>
             <div className="space-y-1">
               {topCats.map(([cat, count]) => (
@@ -100,7 +97,7 @@ export function StatsCards({ products }: StatsCardsProps) {
                 </div>
               )}
             </div>
-          </div>
+          </div> */}
         </div>
       )}
     </div>
