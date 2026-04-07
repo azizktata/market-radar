@@ -3,6 +3,7 @@ import { Geist, Geist_Mono, Inter } from "next/font/google";
 import "./globals.css";
 import { cn } from "@/lib/utils";
 import { NavBar } from "@/components/nav-bar";
+import { CompanyProvider } from "@/contexts/company-context";
 
 const inter = Inter({subsets:['latin'],variable:'--font-sans'});
 
@@ -31,8 +32,10 @@ export default function RootLayout({
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
-        <NavBar />
-        {children}
+        <CompanyProvider>
+          <NavBar />
+          {children}
+        </CompanyProvider>
       </body>
     </html>
   );

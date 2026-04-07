@@ -1,95 +1,123 @@
 import sqlite3
 import os
+from dotenv import load_dotenv
 
-DB_PATH = os.path.join(os.path.dirname(__file__), "market_radar.db")
+load_dotenv()
+
+DB_PATH = os.environ.get("SQLITE_DB", "market_radar.db")
 
 
 def get_conn():
-    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+    conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA foreign_keys=ON")
+    conn.execute("PRAGMA foreign_keys = ON")
     return conn
 
 
 def init_db():
     conn = get_conn()
-    conn.executescript("""
-        CREATE TABLE IF NOT EXISTS products (
-            id             INTEGER PRIMARY KEY AUTOINCREMENT,
-            reference      TEXT UNIQUE NOT NULL,
-            name           TEXT,
-            source         TEXT DEFAULT 'manual',
-            category       TEXT,
-            sous_categorie TEXT,
-            marque         TEXT,
-            pvc            REAL,
-            created_at     TEXT DEFAULT CURRENT_TIMESTAMP
-        );
+    try:
+        cur = conn.cursor()
 
-        CREATE TABLE IF NOT EXISTS scrape_sessions (
-            id          INTEGER PRIMARY KEY AUTOINCREMENT,
-            type        TEXT NOT NULL,
-            status      TEXT NOT NULL DEFAULT 'running',
-            total       INTEGER DEFAULT 0,
-            done        INTEGER DEFAULT 0,
-            started_at  TEXT DEFAULT CURRENT_TIMESTAMP,
-            finished_at TEXT
-        );
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS companies (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
 
-        CREATE TABLE IF NOT EXISTS scrape_results (
-            id           INTEGER PRIMARY KEY AUTOINCREMENT,
-            product_id   INTEGER REFERENCES products(id) ON DELETE CASCADE,
-            session_id   INTEGER REFERENCES scrape_sessions(id),
-            site         TEXT NOT NULL,
-            url          TEXT,
-            price_raw    TEXT,
-            price        REAL,
-            availability TEXT,
-            scraped_at   TEXT DEFAULT CURRENT_TIMESTAMP
-        );
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                email TEXT UNIQUE NOT NULL,
+                name TEXT,
+                password_hash TEXT NOT NULL,
+                role TEXT CHECK(role IN ('superadmin','user')) DEFAULT 'user',
+                is_active INTEGER DEFAULT 1,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
 
-        CREATE INDEX IF NOT EXISTS idx_results_product_site
-            ON scrape_results(product_id, site, scraped_at DESC);
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS user_companies (
+                user_id INTEGER,
+                company_id INTEGER,
+                PRIMARY KEY (user_id, company_id),
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE RESTRICT
+            )
+        """)
 
-        CREATE TABLE IF NOT EXISTS sites (
-            id             INTEGER PRIMARY KEY AUTOINCREMENT,
-            name           TEXT NOT NULL,
-            domain         TEXT NOT NULL UNIQUE,
-            scraper_key    TEXT NOT NULL UNIQUE,
-            price_selector TEXT NOT NULL,
-            threshold      REAL NOT NULL DEFAULT 0,
-            enabled        INTEGER NOT NULL DEFAULT 1,
-            created_at     TEXT DEFAULT CURRENT_TIMESTAMP
-        );
-    """)
-    conn.commit()
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS products (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                company_id INTEGER,
+                reference TEXT NOT NULL,
+                name TEXT,
+                source TEXT DEFAULT 'manual',
+                category TEXT,
+                sous_categorie TEXT,
+                marque TEXT,
+                pvc REAL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE CASCADE,
+                UNIQUE (reference, company_id)
+            )
+        """)
 
-    # Safe migrations for existing databases
-    for migration in [
-        "ALTER TABLE products ADD COLUMN category TEXT",
-        "ALTER TABLE products ADD COLUMN pvc REAL",
-        "ALTER TABLE products ADD COLUMN sous_categorie TEXT",
-        "ALTER TABLE products ADD COLUMN marque TEXT",
-        "ALTER TABLE sites ADD COLUMN price_selector TEXT NOT NULL DEFAULT ''",
-        "ALTER TABLE sites ADD COLUMN threshold REAL NOT NULL DEFAULT 0",
-    ]:
-        try:
-            conn.execute(migration)
-            conn.commit()
-        except Exception:
-            pass  # Column already exists
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS sites (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                company_id INTEGER,
+                name TEXT NOT NULL,
+                domain TEXT NOT NULL,
+                scraper_key TEXT NOT NULL,
+                price_selector TEXT DEFAULT '',
+                threshold REAL DEFAULT 0,
+                enabled INTEGER DEFAULT 1,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE CASCADE,
+                UNIQUE (domain, company_id),
+                UNIQUE (scraper_key, company_id)
+            )
+        """)
 
-    # Seed the 3 default sites
-    for name, domain, scraper_key, price_selector in [
-        ("Tunisianet", "tunisianet.com.tn", "tunisianet", "span.current-price-value"),
-        ("Mytek",      "mytek.tn",          "mytek",      ".product-info-price span.price"),
-        ("Spacenet",   "spacenet.tn",       "spacenet",   "span.current-price-value"),
-    ]:
-        conn.execute(
-            "INSERT OR IGNORE INTO sites (name, domain, scraper_key, price_selector) VALUES (?, ?, ?, ?)",
-            (name, domain, scraper_key, price_selector),
-        )
-    conn.commit()
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS scrape_sessions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                company_id INTEGER,
+                type TEXT NOT NULL,
+                status TEXT DEFAULT 'running',
+                total INTEGER DEFAULT 0,
+                done INTEGER DEFAULT 0,
+                started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                finished_at TIMESTAMP,
+                FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE CASCADE
+            )
+        """)
 
-    conn.close()
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS scrape_results (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                product_id INTEGER,
+                session_id INTEGER,
+                site TEXT NOT NULL,
+                url TEXT,
+                price_raw TEXT,
+                price REAL,
+                availability TEXT,
+                scraped_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE,
+                FOREIGN KEY (session_id) REFERENCES scrape_sessions(id)
+            )
+        """)
+
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_results_product_site ON scrape_results(product_id, site, scraped_at)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_products_company ON products(company_id)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_sites_company ON sites(company_id)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_sessions_company ON scrape_sessions(company_id)")
+
+        conn.commit()
+    finally:
+        conn.close()

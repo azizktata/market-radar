@@ -1,13 +1,40 @@
-const BASE = "http://localhost:8000";
+const BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, init);
+  const res = await fetch(`${BASE}${path}`, {
+    ...init,
+    credentials: "include",
+  });
+  if (res.status === 401) {
+    if (window.location.pathname !== "/login") {
+      window.location.href = "/login";
+    }
+    throw new Error("Session expirée");
+  }
   if (!res.ok) {
     const text = await res.text().catch(() => "");
     throw new Error(`${res.status} ${text}`);
   }
   return res.json() as Promise<T>;
 }
+
+export type Company = {
+  id: number;
+  name: string;
+  created_at: string;
+};
+
+export type User = {
+  id: number;
+  email: string;
+  name: string | null;
+  role: "superadmin" | "user";
+  companies: Company[];
+};
+
+export type LoginResponse = {
+  user: User;
+};
 
 export type SiteResult = {
   price: number | null;
@@ -52,19 +79,37 @@ export type Session = {
 };
 
 export const api = {
-  getProducts: () => req<Product[]>("/api/products"),
+  login: (email: string, password: string) =>
+    req<LoginResponse>("/api/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, password }),
+    }),
 
-  addProduct: (data: { reference: string; name?: string; category?: string; sous_categorie?: string; marque?: string; pvc?: number }) =>
-    req<Product>("/api/products", {
+  logout: () =>
+    req<{ ok: boolean }>("/api/auth/logout", { method: "POST" }),
+
+  getMe: () =>
+    req<{ user: User }>("/api/auth/me"),
+
+  getProducts: (companyId: number) =>
+    req<Product[]>(`/api/products?company_id=${companyId}`),
+
+  addProduct: (companyId: number, data: { reference: string; name?: string; category?: string; sous_categorie?: string; marque?: string; pvc?: number }) =>
+    req<Product>(`/api/products?company_id=${companyId}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(data),
     }),
 
-  importProducts: async (file: File): Promise<{ added: number; skipped: number }> => {
+  importProducts: async (companyId: number, file: File): Promise<{ added: number; skipped: number }> => {
     const form = new FormData();
     form.append("file", file);
-    const res = await fetch(`${BASE}/api/products/import`, { method: "POST", body: form });
+    const res = await fetch(`${BASE}/api/products/import?company_id=${companyId}`, {
+      method: "POST",
+      body: form,
+      credentials: "include",
+    });
     if (!res.ok) {
       const text = await res.text().catch(() => "");
       throw new Error(`${res.status} ${text}`);
@@ -72,36 +117,43 @@ export const api = {
     return res.json();
   },
 
-  deleteProduct: (id: number) =>
-    fetch(`${BASE}/api/products/${id}`, { method: "DELETE" }),
+  deleteProduct: (companyId: number, id: number) =>
+    fetch(`${BASE}/api/products/${id}?company_id=${companyId}`, {
+      method: "DELETE",
+      credentials: "include",
+    }),
 
-  clearProducts: () =>
-    req<{ deleted: number }>("/api/products", { method: "DELETE" }),
+  clearProducts: (companyId: number) =>
+    req<{ deleted: number }>(`/api/products?company_id=${companyId}`, { method: "DELETE" }),
 
-  getSites: () => req<Site[]>("/api/sites"),
+  getSites: (companyId: number) =>
+    req<Site[]>(`/api/sites?company_id=${companyId}`),
 
-  addSite: (data: {
+  addSite: (companyId: number, data: {
     name: string; domain: string;
     sample_url?: string;
     price_selector?: string;
     scraper_key?: string;
     threshold?: number; enabled?: boolean;
   }) =>
-    req<Site & { detected: boolean; price_sample: string | null }>("/api/sites", {
+    req<Site & { detected: boolean; price_sample: string | null }>(`/api/sites?company_id=${companyId}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(data),
     }),
 
-  updateSite: (id: number, data: Partial<Omit<Site, "id" | "created_at">> & { sample_url?: string }) =>
-    req<Site>(`/api/sites/${id}`, {
+  updateSite: (companyId: number, id: number, data: Partial<Omit<Site, "id" | "created_at">> & { sample_url?: string }) =>
+    req<Site>(`/api/sites/${id}?company_id=${companyId}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(data),
     }),
 
-  deleteSite: (id: number) =>
-    fetch(`${BASE}/api/sites/${id}`, { method: "DELETE" }),
+  deleteSite: (companyId: number, id: number) =>
+    fetch(`${BASE}/api/sites/${id}?company_id=${companyId}`, {
+      method: "DELETE",
+      credentials: "include",
+    }),
 
   detectSiteSelector: (url: string) =>
     req<{ selector: string | null; price_sample: string | null }>("/api/sites/detect", {
@@ -110,8 +162,8 @@ export const api = {
       body: JSON.stringify({ url }),
     }),
 
-  startScrape: (productIds?: number[], resumeFromSession?: number, categories?: string[]) =>
-    req<{ session_id: number }>("/api/scrape", {
+  startScrape: (companyId: number, productIds?: number[], resumeFromSession?: number, categories?: string[]) =>
+    req<{ session_id: number }>(`/api/scrape?company_id=${companyId}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -121,14 +173,71 @@ export const api = {
       }),
     }),
 
-  getCategories: () => req<string[]>("/api/products/categories"),
+  getCategories: (companyId: number) =>
+    req<string[]>(`/api/products/categories?company_id=${companyId}`),
 
-  stopScrape: () =>
-    req<{ ok: boolean }>("/api/scrape/stop", { method: "POST" }),
+  stopScrape: (companyId: number) =>
+    req<{ ok: boolean }>(`/api/scrape/stop?company_id=${companyId}`, { method: "POST" }),
 
-  getSession: (id: number) => req<Session>(`/api/sessions/${id}`),
+  getSession: (companyId: number, id: number) =>
+    req<Session>(`/api/sessions/${id}?company_id=${companyId}`),
 
-  getLatestSession: () => req<Session | null>("/api/sessions/latest"),
+  getLatestSession: (companyId: number) =>
+    req<Session | null>(`/api/sessions/latest?company_id=${companyId}`),
 
-  exportUrl: () => `${BASE}/api/export`,
+  exportUrl: (companyId: number) => `${BASE}/api/export?company_id=${companyId}`,
+
+  // Admin endpoints
+  adminGetUsers: () =>
+    req<{ id: number; email: string; name: string | null; role: string; is_active: number; created_at: string }[]>("/api/admin/users"),
+
+  adminCreateUser: (data: { email: string; name?: string; password: string }) =>
+    req<any>("/api/admin/users", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    }),
+
+  adminUpdateUser: (id: number, data: { email?: string; name?: string; password?: string; role?: string; is_active?: boolean }) =>
+    req<any>(`/api/admin/users/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    }),
+
+  adminDeleteUser: (id: number) =>
+    fetch(`${BASE}/api/admin/users/${id}`, { method: "DELETE", credentials: "include" }),
+
+  adminGetCompanies: () =>
+    req<Company[]>("/api/admin/companies"),
+
+  adminCreateCompany: (name: string) =>
+    req<Company>("/api/admin/companies", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }),
+    }),
+
+  adminUpdateCompany: (id: number, name: string) =>
+    req<Company>(`/api/admin/companies/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }),
+    }),
+
+  adminDeleteCompany: (id: number) =>
+    fetch(`${BASE}/api/admin/companies/${id}`, { method: "DELETE", credentials: "include" }),
+
+  adminGetCompanyUsers: (companyId: number) =>
+    req<any[]>(`/api/admin/companies/${companyId}/users`),
+
+  adminAssignUserToCompany: (companyId: number, userId: number) =>
+    req<{ ok: boolean }>(`/api/admin/companies/${companyId}/users`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ user_id: userId }),
+    }),
+
+  adminRemoveUserFromCompany: (companyId: number, userId: number) =>
+    fetch(`${BASE}/api/admin/companies/${companyId}/users/${userId}`, { method: "DELETE", credentials: "include" }),
 };

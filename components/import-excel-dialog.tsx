@@ -8,9 +8,10 @@ interface ImportExcelDialogProps {
   open: boolean;
   onClose: () => void;
   onImported: () => void;
+  companyId: number;
 }
 
-export function ImportExcelDialog({ open, onClose, onImported }: ImportExcelDialogProps) {
+export function ImportExcelDialog({ open, onClose, onImported, companyId }: ImportExcelDialogProps) {
   const [file, setFile] = useState<File | null>(null);
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<{ added: number; skipped: number } | null>(null);
@@ -33,7 +34,7 @@ export function ImportExcelDialog({ open, onClose, onImported }: ImportExcelDial
     setError(null);
     setResult(null);
     try {
-      const res = await api.importProducts(file);
+      const res = await api.importProducts(companyId, file);
       setResult(res);
       onImported();
     } catch (err: unknown) {

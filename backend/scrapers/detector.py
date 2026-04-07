@@ -102,11 +102,11 @@ def detect_price_selector(url: str) -> tuple[str | None, str | None]:
                 cleaned_known = re.sub(r"[^\d]", "", known_price_str)
                 cleaned_found = re.sub(r"[^\d]", "", text)
                 if cleaned_known and cleaned_found and cleaned_known[:4] in cleaned_found:
-                    print(f"[DETECTOR] Matched JSON-LD price with selector: {selector} → {text}")
+                    print(f"[DETECTOR] Matched JSON-LD price with selector: {selector} -> {text}")
                     return selector, text
-                # If no match, fall through to validity check
+                continue  # price doesn't match known value, skip this selector
             if _is_valid_price(text):
-                print(f"[DETECTOR] Found price selector: {selector} → {text}")
+                print(f"[DETECTOR] Found price selector: {selector} -> {text}")
                 return selector, text
         except Exception:
             continue

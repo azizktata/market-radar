@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Pencil, Trash2, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { api, type Site } from "@/lib/api";
+import { useCompany } from "@/contexts/company-context";
 
 type SiteFormData = {
   name: string;
@@ -22,6 +23,7 @@ const EMPTY_FORM: SiteFormData = {
 };
 
 export default function SitesPage() {
+  const { currentCompany, isLoading: companyLoading } = useCompany();
   const [sites, setSites] = useState<Site[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -33,8 +35,9 @@ export default function SitesPage() {
   const [detectionNote, setDetectionNote] = useState<string | null>(null);
 
   const loadSites = useCallback(async () => {
+    if (!currentCompany) return;
     try {
-      const data = await api.getSites();
+      const data = await api.getSites(currentCompany.id);
       setSites(data);
       setError(null);
     } catch {
@@ -42,9 +45,12 @@ export default function SitesPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [currentCompany]);
 
-  useEffect(() => { loadSites(); }, [loadSites]);
+  useEffect(() => {
+    if (!currentCompany || companyLoading) return;
+    loadSites();
+  }, [currentCompany, companyLoading, loadSites]);
 
   function openAdd() {
     setEditing(null);
@@ -69,8 +75,9 @@ export default function SitesPage() {
   }
 
   async function handleToggle(site: Site) {
+    if (!currentCompany) return;
     try {
-      const updated = await api.updateSite(site.id, { enabled: !site.enabled });
+      const updated = await api.updateSite(currentCompany.id, site.id, { enabled: !site.enabled });
       setSites((prev) => prev.map((s) => (s.id === site.id ? updated : s)));
     } catch (e: unknown) {
       alert(e instanceof Error ? e.message : "Erreur lors de la mise à jour.");
@@ -78,9 +85,10 @@ export default function SitesPage() {
   }
 
   async function handleDelete(site: Site) {
+    if (!currentCompany) return;
     if (!window.confirm(`Supprimer le site «${site.name}» ?`)) return;
     try {
-      await api.deleteSite(site.id);
+      await api.deleteSite(currentCompany.id, site.id);
       setSites((prev) => prev.filter((s) => s.id !== site.id));
     } catch (e: unknown) {
       alert(e instanceof Error ? e.message : "Erreur lors de la suppression.");
@@ -89,6 +97,7 @@ export default function SitesPage() {
 
   async function handleSave(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
+    if (!currentCompany) return;
     setSaving(true);
     setFormError(null);
     setDetectionNote(null);
@@ -103,11 +112,11 @@ export default function SitesPage() {
 
     try {
       if (editing) {
-        const updated = await api.updateSite(editing.id, payload);
+        const updated = await api.updateSite(currentCompany.id, editing.id, payload);
         setSites((prev) => prev.map((s) => (s.id === editing.id ? updated : s)));
         setModalOpen(false);
       } else {
-        const created = await api.addSite(payload);
+        const created = await api.addSite(currentCompany.id, payload);
         setSites((prev) => [...prev, created]);
         if (created.detected) {
           setDetectionNote(
@@ -119,7 +128,6 @@ export default function SitesPage() {
         if (!created.detected || !payload.sample_url) {
           setModalOpen(false);
         } else {
-          // Keep modal open briefly to show detection result, then close
           setTimeout(() => setModalOpen(false), 2500);
         }
       }
@@ -128,6 +136,14 @@ export default function SitesPage() {
     } finally {
       setSaving(false);
     }
+  }
+
+  if (companyLoading || !currentCompany) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <div className="text-muted-foreground text-sm">Chargement...</div>
+      </div>
+    );
   }
 
   return (
@@ -222,7 +238,6 @@ export default function SitesPage() {
         )}
       </div>
 
-      {/* Add / Edit modal */}
       {modalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
           <div className="w-full max-w-md rounded-lg bg-background border shadow-lg p-6 space-y-4">

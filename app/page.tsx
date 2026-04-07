@@ -9,8 +9,10 @@ import { ImportExcelDialog } from "@/components/import-excel-dialog";
 import { ProgressBar } from "@/components/progress-bar";
 import { StatsCards } from "@/components/stats-cards";
 import { api, type Product, type Session, type Site } from "@/lib/api";
+import { useCompany } from "@/contexts/company-context";
 
 export default function Home() {
+  const { currentCompany, isLoading: companyLoading } = useCompany();
   const [products, setProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -25,8 +27,9 @@ export default function Home() {
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const loadProducts = useCallback(async () => {
+    if (!currentCompany) return;
     try {
-      const data = await api.getProducts();
+      const data = await api.getProducts(currentCompany.id);
       setProducts(data);
       setError(null);
     } catch {
@@ -34,24 +37,24 @@ export default function Home() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [currentCompany]);
 
   useEffect(() => {
+    if (!currentCompany || companyLoading) return;
     loadProducts();
-    api.getLatestSession().then((s) => { if (s) setSession(s); }).catch(() => {});
-    api.getCategories().then(setCategories).catch(() => {});
-    api.getSites().then(setSites).catch(() => {});
-  }, [loadProducts]);
+    api.getLatestSession(currentCompany.id).then((s) => { if (s) setSession(s); }).catch(() => {});
+    api.getCategories(currentCompany.id).then(setCategories).catch(() => {});
+    api.getSites(currentCompany.id).then(setSites).catch(() => {});
+  }, [currentCompany, companyLoading, loadProducts]);
 
   useEffect(() => {
-    if (products.length > 0) {
-      api.getCategories().then(setCategories).catch(() => {});
+    if (products.length > 0 && currentCompany) {
+      api.getCategories(currentCompany.id).then(setCategories).catch(() => {});
     }
-  }, [products]);
+  }, [products, currentCompany]);
 
-  // Poll running session
   useEffect(() => {
-    if (!session || session.status !== "running") {
+    if (!session || session.status !== "running" || !currentCompany) {
       if (pollRef.current) clearInterval(pollRef.current);
       if (session?.status === "done" || session?.status === "stopped") {
         setStopping(false);
@@ -61,45 +64,50 @@ export default function Home() {
     }
     pollRef.current = setInterval(async () => {
       try {
-        const updated = await api.getSession(session.id);
+        const updated = await api.getSession(currentCompany.id, session.id);
         setSession(updated);
       } catch { /* ignore */ }
     }, 2000);
     return () => { if (pollRef.current) clearInterval(pollRef.current); };
-  }, [session, loadProducts]);
+  }, [session, loadProducts, currentCompany]);
 
   async function handleScrape(resumeFrom?: number) {
+    if (!currentCompany) return;
     try {
       let session_id: number;
       if (selectedIds.length > 0) {
-        ({ session_id } = await api.startScrape(selectedIds, resumeFrom));
+        ({ session_id } = await api.startScrape(currentCompany.id, selectedIds, resumeFrom));
       } else if (selectedCategory) {
-        ({ session_id } = await api.startScrape(undefined, resumeFrom, [selectedCategory]));
+        ({ session_id } = await api.startScrape(currentCompany.id, undefined, resumeFrom, [selectedCategory]));
       } else {
-        ({ session_id } = await api.startScrape(undefined, resumeFrom));
+        ({ session_id } = await api.startScrape(currentCompany.id, undefined, resumeFrom));
       }
-      setSession(await api.getSession(session_id));
+      setSession(await api.getSession(currentCompany.id, session_id));
     } catch (e: unknown) { alert(e instanceof Error ? e.message : String(e)); }
   }
 
   async function handleStop() {
+    if (!currentCompany) return;
     setStopping(true);
-    try { await api.stopScrape(); } catch (e: unknown) { alert(e instanceof Error ? e.message : String(e)); setStopping(false); }
+    try { await api.stopScrape(currentCompany.id); } catch (e: unknown) { alert(e instanceof Error ? e.message : String(e)); setStopping(false); }
   }
 
   async function handleAdd(product: { reference: string; name?: string; category?: string; sous_categorie?: string; marque?: string; pvc?: number }) {
-    await api.addProduct(product);
+    if (!currentCompany) return;
+    await api.addProduct(currentCompany.id, product);
     await loadProducts();
   }
 
   async function handleDelete(id: number) {
-    await api.deleteProduct(id);
+    if (!currentCompany) return;
+    await api.deleteProduct(currentCompany.id, id);
     setProducts((prev) => prev.filter((p) => p.id !== id));
   }
 
   async function handleClearAll() {
+    if (!currentCompany) return;
     if (!window.confirm(`Supprimer les ${products.length} produit(s) ? Cette action est irréversible.`)) return;
-    await api.clearProducts();
+    await api.clearProducts(currentCompany.id);
     setProducts([]);
   }
 
@@ -119,6 +127,14 @@ export default function Home() {
     : selectedCategory
     ? `Scraper — ${selectedCategory}`
     : "Scraper tout";
+
+  if (companyLoading || !currentCompany) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <div className="text-muted-foreground text-sm">Chargement...</div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-background">
@@ -146,20 +162,6 @@ export default function Home() {
               <Trash2 className="size-4 mr-1.5" />Vider la liste
             </Button>
 
-            {/* {categories.length > 0 && (
-              <select
-                value={selectedCategory}
-                onChange={(e) => { setSelectedCategory(e.target.value); setSelectedIds([]); }}
-                disabled={isRunning}
-                className="h-9 rounded-md border border-input bg-background px-2 text-sm outline-none focus:ring-2 focus:ring-ring/50 disabled:opacity-50"
-              >
-                <option value="">Toutes catégories</option>
-                {categories.map((c) => (
-                  <option key={c} value={c}>{c}</option>
-                ))}
-              </select>
-            )} */}
-
             {isRunning ? (
               <Button size="sm" variant="destructive" onClick={handleStop} disabled={stopping}>
                 <Square className="size-4 mr-1.5" />
@@ -171,7 +173,7 @@ export default function Home() {
               </Button>
             )}
 
-            <Button variant="outline" size="sm" onClick={() => window.location.href = api.exportUrl()} disabled={products.length === 0}>
+            <Button variant="outline" size="sm" onClick={() => window.location.href = api.exportUrl(currentCompany.id)} disabled={products.length === 0}>
               <Download className="size-4 mr-1.5" />Excel
             </Button>
           </div>
@@ -221,7 +223,7 @@ export default function Home() {
       </main>
 
       <AddProductDialog open={addOpen} onClose={() => setAddOpen(false)} onAdd={handleAdd} />
-      <ImportExcelDialog open={importOpen} onClose={() => setImportOpen(false)} onImported={loadProducts} />
+      <ImportExcelDialog open={importOpen} onClose={() => setImportOpen(false)} onImported={loadProducts} companyId={currentCompany.id} />
     </div>
   );
 }
